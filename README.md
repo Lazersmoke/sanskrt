@@ -1,2 +1,3 @@
 # sanskrt
- Semantics for a subset of standard LaTeX-ish math
+
+Semantics for a subset of standard LaTeX-ish math
