@@ -30,7 +30,7 @@
 }
 #codeOutput{
   width:50%;
-  height:80%;
+  height:40%;
   right:0;
   top:0;
   background-color:#99CCFF;
@@ -57,6 +57,19 @@
   top: 0;
   z-index: 10;
 }
+.actionButton{
+  float: left;
+}
+.actionButton .katex{
+  user-select: none;
+}
+#actionList{
+  position: absolute;
+  right: 0;
+  bottom: 20%;
+  height: 40%;
+  width: 50%;
+}
     </style>
   </head>
   <body>
@@ -66,6 +79,7 @@
     <textarea spellcheck="false" id="parseOutput" class="code"></textarea>
     <div id="ruleButtons">
     </div>
+    <div id="actionList"></div>
     <div id="renderOutput"></div>
   </body>
 </html>

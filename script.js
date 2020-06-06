@@ -9,11 +9,44 @@ window.onload = () => {
       if(!res){throw new Error()}
       treeOut = res
       parseOut.value = JSON.stringify(treeOut,null,"  ")
-      const reconstructedLatex = renderAsLatex(treeOut)
+      const reconstructedLatex = renderAsLatex(treeOut,true)
       console.log(reconstructedLatex)
       katex.render(reconstructedLatex,renderOut,{displayMode: true})
-      for(let k in allRules){
-        document.getElementById("ruleButton" + k).disabled = !deepMatch(allRules[k],treeOut)
+      const actions = document.getElementById("actionList")
+      actions.innerHTML = ""
+      for(let rule of sortedRules){
+        var locs = []
+        if(rule.match(treeOut)){
+          locs.push([])
+        }
+        traverseSubExprs(treeOut,(o,p,c) => {
+          if(rule.match(o[p])){
+            locs.push(clone(c))
+          }
+        })
+        //document.getElementById("ruleButton" + rule.name).disabled = locs.length == 0
+        locs.forEach(loc =>{
+          var button = document.createElement("button")
+          button.className = "actionButton"
+          button.addEventListener("click", e => {
+            updateTree(() => {console.log(clone(rule),treeOut,loc); return matchApplyAtCrumb(rule,treeOut,loc)})
+          })
+
+          button.append(rule.name)
+
+          var leftTex = document.createElement("div")
+          button.appendChild(leftTex)
+          katex.render(renderAsLatex(atCrumb(treeOut,loc),true),leftTex,{displayMode: false})
+
+          button.append("becomes")
+
+          var rightTex = document.createElement("div")
+          button.appendChild(rightTex)
+          katex.render(renderAsLatex(matchApply(rule,clone(atCrumb(treeOut,loc))),true),rightTex,{displayMode: false})
+          button.append("loc: ",loc)
+
+          actions.prepend(button)
+        })
       }
     }catch(e){
       renderOut.style.backgroundColor = "#ff7777"
@@ -32,19 +65,17 @@ window.onload = () => {
   parseOut.addEventListener("change", e => {
     updateTree(() => JSON.parse(parseOut.value))
   })
-  const buttonDiv = document.getElementById("ruleButtons")
+  /*const buttonDiv = document.getElementById("ruleButtons")
   for(let k in allRules){
     const button = document.createElement("button")
     button.className = "ruleButton"
-    button.id = "ruleButton" + k
-    console.log(allRules[k].name)
+    button.id = "ruleButton" + allRules[k].name
     button.addEventListener("click", e => {
-      console.log(allRules[k].name)
       updateTree(() => deepApply(allRules[k],treeOut))
     })
     button.innerHTML = allRules[k].name
     buttonDiv.appendChild(button)
-  }
+  }*/
   if(inputElem.value == ""){
     inputElem.value = "\\sum_{i=0}^5 \\frac{\\partial}{\\partial x^i}f"
   }
@@ -61,49 +92,84 @@ function renderExpr(expr){
   katex.render(renderAsLatex(expr),newRenderSpot,{displayMode: true})
 }
 
+function renderType(type){
+  if(!type || !type.style){
+    return "\\, ? \\, "
+  }
+  if(type.style == "function"){
+    return renderType(type.domain || "?") + "\\to " + renderType(type.codomain || "?")
+  }
+  if(type.style == "set"){
+    return (type.set || renderType("?"))
+  }
+}
+
 // Render out our expression tree to latex
-function renderAsLatex(tree){
+function renderAsLatex(tree, showTypes = false){
   var out = ""
   if(Array.isArray(tree)){
     tree.forEach(x => {
       if(Array.isArray(x)){
-        out += renderAsLatex({paren: x})
+        out += renderAsLatex({paren: x},showTypes)
       }else{
-        out += renderAsLatex(x)
+        out += renderAsLatex(x,showTypes)
       }
     })
   }
   else if(tree.paren){
-    out += "\\left(" + renderAsLatex(tree.paren) + "\\right)"
+    out += "\\left(" + renderAsLatex(tree.paren,showTypes) + "\\right)"
   }
   else if(tree.ord){
-    out += "{" + renderAsLatex(tree.ord) + "}"
+    out += "{" + renderAsLatex(tree.ord,showTypes) + "}"
   }
   else if(tree.partialVariable){
-    out += "\\frac{\\partial}{\\partial " + renderAsLatex(tree.partialVariable) + "}"
+    out += "\\frac{\\partial}{\\partial " + renderAsLatex(tree.partialVariable,showTypes) + "}"
   }
   else if(tree.binop){
-    out += renderAsLatex(tree.left) + renderAsLatex(tree.binop) + renderAsLatex(tree.right)
+    out += renderAsLatex(tree.left,showTypes) + renderAsLatex(tree.binop,showTypes) + renderAsLatex(tree.right,showTypes)
   }
   else if(tree.operator){
-    out += renderAsLatex(tree.operator) + renderAsLatex(tree.argument)
+    out += renderAsLatex(tree.operator,showTypes) + renderAsLatex(tree.argument,showTypes)
   }
   else if(tree.numer){
-    out += "\\frac" + renderAsLatex(tree.numer) + renderAsLatex(tree.denom)
+    out += "\\frac" + renderAsLatex(tree.numer,showTypes) + renderAsLatex(tree.denom,showTypes)
   }
   else if(tree.base){
-    out += renderAsLatex(tree.base)
+    var thisBit = ""
+    thisBit += renderAsLatex(tree.base,showTypes)
     if(tree.sub){
-      out += "_" + renderAsLatex(tree.sub)
+      thisBit += "_" + renderAsLatex(tree.sub,showTypes)
     }
     if(tree.sup){
-      out += "^" + renderAsLatex(tree.sup)
+      thisBit += "^" + renderAsLatex(tree.sup,showTypes)
+    }
+    if(showTypes && tree.typing){
+      out += "{\\left\\langle " + thisBit + " \\colon " + renderAsLatex(tree.typing,showTypes) + "\\right\\rangle} "
+    }else{
+      out += thisBit
     }
   }
   else if(tree.textContent){
-    out += tree.textContent + " "
+    if(showTypes && tree.typing){
+      out += "{\\left\\langle " + tree.textContent + " \\colon " + renderAsLatex(tree.typing,showTypes) + "\\right\\rangle} "
+    }else{
+      out += tree.textContent + " "
+    }
   }
   return out
+}
+
+function matchApplyAtCrumb(rule,x,crumb){
+  console.log("crumb is ",crumb)
+  if(crumb.length == 0){
+    return matchApply(rule,x)
+  }
+  if(crumb.length == 1){
+    x[crumb[0]] = matchApply(rule,x[crumb[0]])
+  }else{
+    matchApplyAtCrumb(rule,x[crumb[0]],crumb.slice(1))
+  }
+  return x
 }
 
 function atCrumb(x,crumb){
@@ -229,6 +295,7 @@ allRules = {}
 validRules = {}
 
 additiveTemplate = {
+  priority: 20,
   name: "Additivity",
   reqs: {operator: {typing: {additive: true}}, argument: {binop: {textContent: "+"}}},
   replace: {left: {operator: {template: ["operator"]}, argument: {template: ["argument","left"]}}, binop: {template: ["argument","binop"]}, right: {operator: {template: ["operator"]}, argument: {template: ["argument","right"]}}}
@@ -236,6 +303,7 @@ additiveTemplate = {
 
 function ruleFromTemplate(template){
   return {
+    priority: template.priority,
     name: template.name,
     match: t => objectMatches(template.reqs,t),
     apply: (t,o) => {
@@ -257,6 +325,7 @@ function ruleFromTemplate(template){
 }
 
 allRules.assumeJuxtIsCdotRule = {
+  priority: -10,
   name: "Juxt to Cdot",
   match: t => {
     if(Array.isArray(t) && t.length > 1){
@@ -267,6 +336,7 @@ allRules.assumeJuxtIsCdotRule = {
 }
 
 validRules.singletonArrayReduce = {
+  priority: 100,
   name: "Singleton array reduce",
   match: t => {
     if(Array.isArray(t) && t.length == 1){
@@ -279,6 +349,7 @@ validRules.singletonArrayReduce = {
 validRules.additivity = ruleFromTemplate(additiveTemplate)
 
 validRules.recognizeBinop = {
+  priority: 100,
   name: "Recognize binop",
   match: t => {
     if(Array.isArray(t) && t.length == 3 && t[1].family == "bin"){
@@ -289,6 +360,7 @@ validRules.recognizeBinop = {
 }
 
 validRules.symbolicPartial = {
+  priority: 100,
   name: "Symbolic Partial",
   match: t => {
     if(t.numer?.ord.textContent == "\\partial" && t.denom?.ord[0]?.textContent == "\\partial" && t.denom.ord.length > 1){
@@ -299,6 +371,7 @@ validRules.symbolicPartial = {
 }
 
 allRules.productRule = {
+  priority: 20,
   name: "Product rule",
   match: t => {
     if(t.operator?.partialVariable && t.argument.binop?.textContent == "\\cdot"){
@@ -318,6 +391,7 @@ allRules.productRule = {
 const bigOperators = [{symbol: "\\sum", binop: "+", empty: "0"},{symbol: "\\prod", binop: "\\cdot", empty: "1"}]
 
 validRules.expandBigOperator = {
+  priority: 20,
   name: "Expand big operator",
   match: t => {
     for(const op of bigOperators){
@@ -325,8 +399,8 @@ validRules.expandBigOperator = {
         var equals = t.operator?.sub.ord?.binop?.textContent
         if(equals != "="){return}
         var idx = t.operator.sub.ord.left
-        var start = numberLiteral(t.operator.sub.ord.right).value
-        var end = numberLiteral(t.operator.sup).value
+        var start = numberLiteral(t.operator.sub.ord.right)
+        var end = numberLiteral(t.operator.sup)
         if(end < start || !Number.isInteger(start) || !Number.isInteger(end) || !idx){ return }
         return {tree: t.argument,idx: idx, start: start, end: end, op: op}
       }
@@ -354,20 +428,158 @@ validRules.expandBigOperator = {
   }
 }
 
-allRules.inferOperatorTyping = {
-  name: "Infer operator typing",
+allRules.assumeRealOperator = {
+  priority: -10,
+  name: "Assume Real-valued Operator",
   match: t => {
-    if(t.operator && !t.operator.typing && t.argument.typing){
-      return t.argument.typing
+    if(t.typing?.binop?.textContent == "\\to" && t.typing.left.textContent == "?"){
+      return true
+    }
+  },
+  apply: (t,o) => {t.typing.left = {textContent: "\\mathbb{R}"}; return t}
+}
+
+allRules.assumeInteger = {
+  priority: -10,
+  name: "Assume Integer",
+  match: t => {
+    if(t.typing?.textContent == "?" && t.value && Number.isInteger(t.value.number)){
+      return true
+    }
+  },
+  apply: (t,o) => {t.typing = {textContent: "\\mathbb{Z}"}; return t}
+}
+
+allRules.assumeComplex = {
+  priority: -10,
+  name: "Assume Complex",
+  match: t => {
+    if(t.typing?.textContent == "?" && !(t.value && !(t.value.hasOwnProperty("real") && t.value.hasOwnProperty("imag")))){
+      return true
+    }
+  },
+  apply: (t,o) => {t.typing = {textContent: "\\mathbb{C}"}; return t}
+}
+allRules.assumeReal = {
+  priority: -10,
+  name: "Assume Real",
+  match: t => {
+    if(t.typing?.textContent == "?" && !(t.value && !t.value.hasOwnProperty("number"))){
+      return true
+    }
+  },
+  apply: (t,o) => {t.typing = {textContent: "\\mathbb{R}"}; return t}
+}
+
+const constants = [{symbol: "\\pi", value: {number: Math.PI}},{symbol: "e", value: {number: Math.E}},{symbol: "i", value: {real: 0, imag: 1}}]
+
+allRules.constantValue = {
+  priority: 100,
+  name: "Constant Literal",
+  match: t => {
+    if(t.value || !t.textContent){return}
+    for(let c of constants){
+      if(t.textContent == c.symbol){
+        return clone(c.value)
+      }
+    }
+  },
+  apply: (t,o) => {t.value = o; return t}
+}
+allRules.numberLiteralValue = {
+  priority: 100,
+  name: "Number Literal",
+  match: t => {
+    if(t.value){return}
+    return numberLiteral(t)
+  },
+  apply: (t,o) => {t.value = {number: o}; return t}
+}
+
+const emptyBinopType = {binop: {textContent: "\\to"}, left: {binop: {textContent: "\\times"}, left: {textContent: "?"}, right: {textContent: "?"}}, right: {textContent: "?"}}
+
+allRules.assumeEqualSignType = {
+  priority: 100,
+  name: "Assume Equal Sign Type",
+  match: t => {
+    if(t.binop?.textContent == "=" && objectMatches(emptyBinopType,t.binop.typing)){
+      return true
     }
   },
   apply: (t,o) => {
-    t.operator.typing = {domain: o}
+    t.binop.typing.left.left = {textContent: "\\text{Set}"}
+    t.binop.typing.left.right = {textContent: "\\text{Set}"}
+    t.binop.typing.right = {textContent: "\\text{STATEMENT}"}
+    return t
+  }
+}
+
+allRules.assumeSetBinopType = {
+  priority: 100,
+  name: "Assume Set Binop Type",
+  match: t => {
+    if((t.binop?.textContent == "\\times" || t.binop?.textContent == "\\to") && objectMatches(emptyBinopType,t.binop.typing)){
+      return true
+    }
+  },
+  apply: (t,o) => {
+    t.binop.typing.left.left = {textContent: "\\text{Set}"}
+    t.binop.typing.left.right = {textContent: "\\text{Set}"}
+    t.binop.typing.right = {textContent: "\\text{Set}"}
+    return t
+  }
+}
+
+allRules.annotateOperatorType = {
+  priority: -100,
+  name: "Unknown Operator Type",
+  match: t => {
+    if(t.operator && !t.operator.typing){
+      return true
+    }
+  },
+  apply: (t,o) => {t.operator.typing = {binop: {textContent: "\\to"}, left: {textContent: "?"}, right: {textContent: "?"}}; return t}
+}
+
+allRules.annotateUnknownType = {
+  priority: -50,
+  name: "Unknown Type",
+  match: t => {
+    if((t.type == "mathord" || t.type == "textord" || t.base?.type == "mathord" || t.base?.type == "textord") && !t.typing){
+      return true
+    }
+  },
+  apply: (t,o) => {t.typing = {textContent: "?"}; return t}
+}
+
+
+allRules.annoteBinopType = {
+  priority: -100,
+  name: "Unknown Binop Type",
+  match: t => {
+    if(t.binop && !t.binop.typing){
+      return true
+    }
+  },
+  apply: (t,o) => {t.binop.typing = clone(emptyBinopType); return t}
+}
+
+allRules.inferOperatorTyping = {
+  priority: 50,
+  name: "Infer operator typing",
+  match: t => {
+    if(t.operator?.typing?.binop?.textContent == "\\to" && t.operator.typing.left.textContent == "?"){
+      return clone(t.argument.typing)
+    }
+  },
+  apply: (t,o) => {
+    t.operator.typing.left = o
     return t
   }
 }
 
 allRules.unfurlParen = {
+  priority: 0,
   name: "Unfurl paren",
   match: t => {
     return t.paren
@@ -376,31 +588,31 @@ allRules.unfurlParen = {
 }
 
 validRules.recognizeOperator = {
+  priority: 100,
   name: "Recognize operator",
   match: t => {
     var operator
-    if(Array.isArray(t) && t[0]?.type == "op"){
-      operator = t[0]
-    }
-    if(t[0]?.base?.type == "op")
-      operator = t[0]
-    if(operator){
-      if(t[1]?.paren){
-        return {op: operator, arg: t[1], rest: t.slice(2)}
+    if(!Array.isArray(t)){return}
+    var opIdx = t.findIndex(x => x.type == "op" || x.base?.type == "op")
+    var operator = t[opIdx]
+    if(operator && opIdx < t.length - 1){
+      if(t[opIdx + 1]?.paren){
+        return {op: operator, arg: t[opIdx+1], left: t.slice(0,opIdx), rest: t.slice(opIdx + 2)}
       }
-      return {op: operator, arg: matchApply(validRules.singletonArrayReduce,t.slice(1))}
+      return {op: operator, arg: matchApply(validRules.singletonArrayReduce,t.slice(opIdx+1)), left: t.slice(0,opIdx)}
     }
   },
   apply: (t,o) => {
-    var out = {operator: o.op, argument: o.arg}
+    o.left.push({operator: o.op, argument: o.arg})
     if(o.rest){
-      return matchApply(validRules.singletonArrayReduce,[out].concat(o.rest))
+      o.left = o.left.concat(o.rest)
     }
-    return out
+    return matchApply(validRules.singletonArrayReduce,o.left)
   }
 }
 
 validRules.recognizeEquation = {
+  priority: 100,
   name: "Recognize eq",
   match: t => {
     if(Array.isArray(t) && t.length > 2){
@@ -414,9 +626,10 @@ validRules.recognizeEquation = {
 }
 
 Object.assign(allRules,validRules)
+sortedRules = Object.values(allRules).sort((a,b) => a.priority - b.priority)
 
 function matchApply(rule,t){
-  var res = rule.match(t)
+  var res = rule.match(clone(t))
   if(res){
     return rule.apply(t,res)
   }
@@ -457,7 +670,8 @@ function numberLiteral(tree){
   }else{
     numVersion = parseInt(stringVersion)
   }
-  return {value: numVersion}
+  if(!Number.isNaN(numVersion))
+    return numVersion
 }
 
 function partialDerivative(x){
@@ -469,19 +683,21 @@ function clone(o){
 }
 
 function traverseSubExprs(o,f,c=[]){
-  c.push(o)
   if(Array.isArray(o)){
     o.forEach((x,i) => {
+      c.push(i)
       f(o,i,c)
       traverseSubExprs(o[i],f,c)
+      c.pop()
     })
   }else if(typeof o === 'object'){
     for(var prop in o){
+      c.push(prop)
       f(o,prop,c)
       traverseSubExprs(o[prop],f,c)
+      c.pop()
     }
   }
-  c.pop()
 }
 
 function objectMatches(a,b){
