@@ -9,7 +9,7 @@ window.onload = () => {
       if(!res){throw new Error()}
       treeOut = res
       parseOut.value = JSON.stringify(treeOut,null,"  ")
-      const reconstructedLatex = renderAsLatex(treeOut,true)
+      const reconstructedLatex = renderAsLatex(treeOut,document.getElementById("typesCheck").checked)
       console.log(reconstructedLatex)
       katex.render(reconstructedLatex,renderOut,{displayMode: true})
       const actions = document.getElementById("actionList")
@@ -50,11 +50,12 @@ window.onload = () => {
       }
     }catch(e){
       renderOut.style.backgroundColor = "#ff7777"
-      renderOut.innerHTML = e + " at line " + e.lineNumber
+      renderOut.innerHTML = e + " at line " + e.lineNumber + " col " + e.columnNumber + "\nTrace:\n\n" + e.stack
       return
     }
     renderOut.style.backgroundColor = "#77ff77"
   }
+  document.getElementById("typesCheck").addEventListener("click", e => updateTree(() => treeOut))
   inputElem.addEventListener("input",e => {
     updateTree(() => {
       const katexOut = katex.__parse(inputElem.value.replace(/\$/g,""))
@@ -129,7 +130,12 @@ function renderAsLatex(tree, showTypes = false){
     out += renderAsLatex(tree.left,showTypes) + renderAsLatex(tree.binop,showTypes) + renderAsLatex(tree.right,showTypes)
   }
   else if(tree.operator){
-    out += renderAsLatex(tree.operator,showTypes) + renderAsLatex(tree.argument,showTypes)
+    var thisBit = renderAsLatex(tree.operator,showTypes) + renderAsLatex(tree.argument,showTypes)
+    if(showTypes && tree.typing){
+      out += "{\\left\\langle " + thisBit + " \\colon " + renderAsLatex(tree.typing,showTypes) + "\\right\\rangle} "
+    }else{
+      out += thisBit
+    }
   }
   else if(tree.numer){
     out += "\\frac" + renderAsLatex(tree.numer,showTypes) + renderAsLatex(tree.denom,showTypes)
@@ -428,22 +434,33 @@ validRules.expandBigOperator = {
   }
 }
 
+allRules.outputType = {
+  priority: -10,
+  name: "Use operator output type",
+  match: t => {
+    if(t.typing?.textContent == "?" && t.operator?.typing?.binop?.textContent == "\\to" && t.operator.typing.right.textContent != "?"){
+      return clone(t.operator.typing.right)
+    }
+  },
+  apply: (t,o) => {t.typing = o; return t}
+}
+
 allRules.assumeRealOperator = {
   priority: -10,
   name: "Assume Real-valued Operator",
   match: t => {
-    if(t.typing?.binop?.textContent == "\\to" && t.typing.left.textContent == "?"){
+    if(t.typing?.binop?.textContent == "\\to" && t.typing.right.textContent == "?"){
       return true
     }
   },
-  apply: (t,o) => {t.typing.left = {textContent: "\\mathbb{R}"}; return t}
+  apply: (t,o) => {t.typing.right = {textContent: "\\mathbb{R}"}; return t}
 }
 
 allRules.assumeInteger = {
   priority: -10,
   name: "Assume Integer",
   match: t => {
-    if(t.typing?.textContent == "?" && t.value && Number.isInteger(t.value.number)){
+    if(t.typing?.textContent == "?" && (t.type == "mathord" || t.type == "textord") && !(t.value && !Number.isInteger(t.value.number))){
       return true
     }
   },
@@ -454,7 +471,7 @@ allRules.assumeComplex = {
   priority: -10,
   name: "Assume Complex",
   match: t => {
-    if(t.typing?.textContent == "?" && !(t.value && !(t.value.hasOwnProperty("real") && t.value.hasOwnProperty("imag")))){
+    if(t.typing?.textContent == "?" && (t.type == "mathord" || t.type == "textord") && !(t.value && !(t.value.hasOwnProperty("real") && t.value.hasOwnProperty("imag")))){
       return true
     }
   },
@@ -464,7 +481,7 @@ allRules.assumeReal = {
   priority: -10,
   name: "Assume Real",
   match: t => {
-    if(t.typing?.textContent == "?" && !(t.value && !t.value.hasOwnProperty("number"))){
+    if(t.typing?.textContent == "?" && (t.type == "mathord" || t.type == "textord") && !(t.value && !t.value.hasOwnProperty("number"))){
       return true
     }
   },
@@ -545,7 +562,7 @@ allRules.annotateUnknownType = {
   priority: -50,
   name: "Unknown Type",
   match: t => {
-    if((t.type == "mathord" || t.type == "textord" || t.base?.type == "mathord" || t.base?.type == "textord") && !t.typing){
+    if((t.type == "mathord" || t.type == "textord" || t.base?.type == "mathord" || t.base?.type == "textord" || t.operator) && !t.typing){
       return true
     }
   },
@@ -568,7 +585,7 @@ allRules.inferOperatorTyping = {
   priority: 50,
   name: "Infer operator typing",
   match: t => {
-    if(t.operator?.typing?.binop?.textContent == "\\to" && t.operator.typing.left.textContent == "?"){
+    if(t.operator?.typing?.binop?.textContent == "\\to" && t.operator.typing.left.textContent == "?" && t.argument.typing){
       return clone(t.argument.typing)
     }
   },
