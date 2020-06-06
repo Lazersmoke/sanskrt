@@ -51,10 +51,7 @@ window.onload = () => {
   inputElem.dispatchEvent(new Event("input"))
 }
 
-function clearRender(){
-  document.getElementById("renderOutput").innerHTML = ""
-}
-
+// One shot render an expression
 function renderExpr(expr){
   const renderOut = document.getElementById("renderOutput")
   const newRenderSpot = document.createElement("div")
@@ -64,15 +61,16 @@ function renderExpr(expr){
   katex.render(renderAsLatex(expr),newRenderSpot,{displayMode: true})
 }
 
-function latexEqual(a,b){
-  return renderAsLatex(a) == renderAsLatex(b)
-}
-
+// Render out our expression tree to latex
 function renderAsLatex(tree){
   var out = ""
   if(Array.isArray(tree)){
     tree.forEach(x => {
-      out += renderAsLatex(x)
+      if(Array.isArray(x)){
+        out += renderAsLatex({paren: x})
+      }else{
+        out += renderAsLatex(x)
+      }
     })
   }
   else if(tree.paren){
@@ -123,8 +121,8 @@ function setCrumb(x,crumb,val){
   setCrumb(x[crumb[0]],crumb.slice(1),val)
 }
 
-// Into parentheses tree
-// 5(7+3)6
+// Convert from katex parse tree into an expression tree
+// further simplifactions are required after this
 function parsedToTree(katexOutput){
   var crumbs = []
   var out = []
@@ -210,8 +208,11 @@ function parsedToTree(katexOutput){
       curSubExpr = crumbs.pop()
       return
     }
-    if(x.type == "mathord" || x.type == "textord" || x.type == "atom"){
+    if(x.type == "mathord" || x.type == "textord"){
       curSubExpr.push({textContent: x.text, origin: "parse", type: x.type})
+    }
+    if(x.type == "atom"){
+      curSubExpr.push({textContent: x.text, origin: "parse", type: x.type, family: x.family})
     }
     if(x.type == "op"){
       curSubExpr.push({textContent: x.name, origin: "parse", type: x.type})
@@ -222,48 +223,38 @@ function parsedToTree(katexOutput){
   return deepApply(validRules.singletonArrayReduce,curSubExpr)
 }
 
-function tensorComponents(tree,idx,dim){
-  var occurs = []
-  traverseCrumbs(tree,(x,p,c) => {
-    if(x[p] == idx){
-      var cr = []
-      c.forEach(n => cr.push(n))
-      occurs.push(cr)
-    }
-  })
-  var out = []
-  for(var i = 0; i < dim; i++){
-    occurs.forEach(o => {
-      setCrumb(tree,o,i.toString())
-    })
-    out.push(JSON.parse(JSON.stringify(tree)))
-  }
-  return out
-}
-
-function explicateSum(tree,idx,start,end){
-  if(start == end){
-    return {textContent: "0", origin: "Explicated empty sum"}
-  }
-  var out
-  for(var i = start; i <= end; i++){
-    thisTree = clone(tree)
-    traverseSubExprs(thisTree,(o,p,c) => {
-      if(objectMatches(idx,o[p])){
-        o[p] = {ord: {textContent: i.toString(), origin: "Summation index"}}
-      }
-    })
-    if(out){
-      out = {left: out, binop: {textContent: "+", origin: "Summation"}, right: {paren: thisTree}}
-    }else{
-      out = {paren: thisTree}
-    }
-  }
-  return out
-}
-
+// Contains all rules, even those that are only sometimes mathematically correct
 allRules = {}
+// Contains rules which are always valid to apply with impunity
 validRules = {}
+
+additiveTemplate = {
+  name: "Additivity",
+  reqs: {operator: {typing: {additive: true}}, argument: {binop: {textContent: "+"}}},
+  replace: {left: {operator: {template: ["operator"]}, argument: {template: ["argument","left"]}}, binop: {template: ["argument","binop"]}, right: {operator: {template: ["operator"]}, argument: {template: ["argument","right"]}}}
+}
+
+function ruleFromTemplate(template){
+  return {
+    name: template.name,
+    match: t => objectMatches(template.reqs,t),
+    apply: (t,o) => {
+      const trav = obj => {
+        console.log(obj)
+        for(let k in obj){
+          if(obj[k].template){
+            obj[k] = atCrumb(t,obj[k].template)
+          }else{
+            trav(obj[k])
+          }
+        }
+      }
+      var out = clone(template.replace)
+      trav(out)
+      return out
+    }
+  }
+}
 
 allRules.assumeJuxtIsCdotRule = {
   name: "Juxt to Cdot",
@@ -272,7 +263,7 @@ allRules.assumeJuxtIsCdotRule = {
       return {left: t[0], right: t[1], rest: t.slice(2)}
     }
   },
-  apply: (t,o) => {return [{binop: {textContent: "\\cdot", origin: "Juxtaposition"}, left: o.left, right: o.right}].concat(o.rest)}
+  apply: (t,o) => {return matchApply(validRules.singletonArrayReduce,[{binop: {textContent: "\\cdot", origin: "Juxtaposition"}, left: o.left, right: o.right}].concat(o.rest))}
 }
 
 validRules.singletonArrayReduce = {
@@ -280,6 +271,18 @@ validRules.singletonArrayReduce = {
   match: t => {
     if(Array.isArray(t) && t.length == 1){
       return t[0]
+    }
+  },
+  apply: (t,o) => o
+}
+
+validRules.additivity = ruleFromTemplate(additiveTemplate)
+
+validRules.recognizeBinop = {
+  name: "Recognize binop",
+  match: t => {
+    if(Array.isArray(t) && t.length == 3 && t[1].family == "bin"){
+      return {left: t[0], binop: t[1], right: t[2]}
     }
   },
   apply: (t,o) => o
@@ -305,17 +308,71 @@ allRules.productRule = {
   apply: (t,o) => {
     var out = 
       {binop: {textContent: "+", origin: "Product rule"}
-      ,left: {binop: {textContent: "\\cdot", origin: "Product rule"}, left: {paren: partialDerivative(o.variable,o.prod)},right: o.rest}
-      ,right: {binop: {textContent: "\\cdot", origin: "Product rule"}, left: o.prod,right: {paren: partialDerivative(o.variable,o.rest)}}
+      ,left: {binop: {textContent: "\\cdot", origin: "Product rule"}, left: {paren: {operator: partialDerivative(o.variable), argument: o.prod}},right: o.rest}
+      ,right: {binop: {textContent: "\\cdot", origin: "Product rule"}, left: o.prod,right: {paren: {operator: partialDerivative(o.variable), argument: o.rest}}}
       }
     return out
   }
 }
 
-validRules.expandSumRule = {
-  name: "Expand sum",
-  match: matchExpandSum,
-  apply: (t,o) => explicateSum(o.tree,o.idx,o.start,o.end)
+const bigOperators = [{symbol: "\\sum", binop: "+", empty: "0"},{symbol: "\\prod", binop: "\\cdot", empty: "1"}]
+
+validRules.expandBigOperator = {
+  name: "Expand big operator",
+  match: t => {
+    for(const op of bigOperators){
+      if(t.operator?.base?.textContent == op.symbol){
+        var equals = t.operator?.sub.ord?.binop?.textContent
+        if(equals != "="){return}
+        var idx = t.operator.sub.ord.left
+        var start = numberLiteral(t.operator.sub.ord.right).value
+        var end = numberLiteral(t.operator.sup).value
+        if(end < start || !Number.isInteger(start) || !Number.isInteger(end) || !idx){ return }
+        return {tree: t.argument,idx: idx, start: start, end: end, op: op}
+      }
+    }
+  },
+  apply: (t,o) => {
+    if(o.start == o.end){
+      return {textContent: o.op.empty, origin: "Explicated empty big operator"}
+    }
+    var out
+    for(var i = o.start; i <= o.end; i++){
+      thisTree = clone(o.tree)
+      traverseSubExprs(thisTree,(ob,p,c) => {
+        if(objectMatches(o.idx,ob[p])){
+          ob[p] = {ord: {textContent: i.toString(), origin: "Big operator index"}}
+        }
+      })
+      if(out){
+        out = {left: out, binop: {textContent: o.op.binop, origin: "Big operator"}, right: {paren: thisTree}}
+      }else{
+        out = {paren: thisTree}
+      }
+    }
+    return out
+  }
+}
+
+allRules.inferOperatorTyping = {
+  name: "Infer operator typing",
+  match: t => {
+    if(t.operator && !t.operator.typing && t.argument.typing){
+      return t.argument.typing
+    }
+  },
+  apply: (t,o) => {
+    t.operator.typing = {domain: o}
+    return t
+  }
+}
+
+allRules.unfurlParen = {
+  name: "Unfurl paren",
+  match: t => {
+    return t.paren
+  },
+  apply: (t,o) => o
 }
 
 validRules.recognizeOperator = {
@@ -331,13 +388,13 @@ validRules.recognizeOperator = {
       if(t[1]?.paren){
         return {op: operator, arg: t[1], rest: t.slice(2)}
       }
-      return {op: operator, arg: t.slice(1)}
+      return {op: operator, arg: matchApply(validRules.singletonArrayReduce,t.slice(1))}
     }
   },
   apply: (t,o) => {
     var out = {operator: o.op, argument: o.arg}
     if(o.rest){
-      return [out].concat(o.rest)
+      return matchApply(validRules.singletonArrayReduce,[out].concat(o.rest))
     }
     return out
   }
@@ -384,19 +441,7 @@ function deepApply(rule,t){
   return t
 }
 
-function matchExpandSum(tree){
-  if(tree?.operator?.base?.textContent == "\\sum"){
-    var equals = tree.operator.sub.ord?.binop?.textContent
-    console.log(equals)
-    if(equals != "="){return}
-    var idx = tree.operator.sub.ord.left
-    var start = numberLiteral(tree.operator.sub.ord.right).value
-    var end = numberLiteral(tree.operator.sup).value
-    console.log(idx,start,end)
-    if(end < start || !Number.isInteger(start) || !Number.isInteger(end) || !idx){ return }
-    return {tree: tree.argument,idx: idx, start: start, end: end}
-  }
-}
+
 
 function collapseString(tree){
   var str = ""
@@ -415,8 +460,8 @@ function numberLiteral(tree){
   return {value: numVersion}
 }
 
-function partialDerivative(x,expr){
-  return {partialVariable: x, partialBody: expr}
+function partialDerivative(x){
+  return {partialVariable: x}
 }
 
 function clone(o){
@@ -441,7 +486,7 @@ function traverseSubExprs(o,f,c=[]){
 
 function objectMatches(a,b){
   if(typeof a === 'object'){
-    for(prop in a){
+    for(let prop in a){
       if(!b || !objectMatches(a[prop],b[prop])){
         return false
       }
@@ -452,7 +497,7 @@ function objectMatches(a,b){
 }
 
 function traverseCrumbs(o,f,c=[]){
-  for(prop in o){
+  for(let prop in o){
     c.push(prop)
     if(typeof o[prop] === 'object'){
       traverseCrumbs(o[prop],f,c)
