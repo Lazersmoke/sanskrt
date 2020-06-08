@@ -123,14 +123,20 @@ function renderAsLatex(tree, showTypes = false){
   else if(tree.ord){
     out += "{" + renderAsLatex(tree.ord,showTypes) + "}"
   }
-  else if(tree.partialVariable){
-    out += "\\frac{\\partial}{\\partial " + renderAsLatex(tree.partialVariable,showTypes) + "}"
+  else if(tree.objectName){
+    const renderer = objectRenderers.find(x => x.objectName == tree.objectName).render
+    var thisBit = renderAsLatex(renderer(tree.data),showTypes)
+    if(showTypes && tree.typing){
+      out += "{\\left\\langle " + thisBit + " \\colon " + renderAsLatex(tree.typing,showTypes) + "\\right\\rangle} "
+    }else{
+      out += thisBit
+    }
   }
   else if(tree.binop){
     out += renderAsLatex(tree.left,showTypes) + renderAsLatex(tree.binop,showTypes) + renderAsLatex(tree.right,showTypes)
   }
   else if(tree.operator){
-    var thisBit = renderAsLatex(tree.operator,showTypes) + renderAsLatex(tree.argument,showTypes)
+    var thisBit = renderAsLatex(tree.operator,showTypes) + "[ " + renderAsLatex(tree.argument,showTypes) + " ] "
     if(showTypes && tree.typing){
       out += "{\\left\\langle " + thisBit + " \\colon " + renderAsLatex(tree.typing,showTypes) + "\\right\\rangle} "
     }else{
@@ -161,6 +167,9 @@ function renderAsLatex(tree, showTypes = false){
     }else{
       out += tree.textContent + " "
     }
+  }
+  if(tree.value){
+    out = "\\textcolor{blue}{" + out + "}"
   }
   return out
 }
@@ -217,6 +226,12 @@ function parsedToTree(katexOutput){
         curSubExpr = crumbs.pop()
         return
       }
+    }
+    if(x.type == "text"){
+      var string = ""
+      x.body.forEach(textPc => {string += textPc.text})
+      curSubExpr.push({textContent: "\\text{" + string + "}"})
+      return
     }
     if(x.type == "supsub"){
       var scriptedObj = {}
@@ -300,6 +315,35 @@ allRules = {}
 // Contains rules which are always valid to apply with impunity
 validRules = {}
 
+objectRenderers = [
+  {objectName: "pullback", render: data => {
+    return {base: data.base, sup: {textContent: "*"}}
+  }, recog: t => {
+    var data = {base: t.base}
+    return data
+  }},
+  {objectName: "partial", render: data => {
+    return {numer: {ord: {textContent: "\\partial"}}, denom: {ord: [{textContent: "\\partial"},data.variable]}}
+  }, recog: t => {
+    if(t.numer?.ord.textContent == "\\partial" && t.denom?.ord[0]?.textContent == "\\partial" && t.denom.ord.length > 1){
+      return {variable: deepApply(validRules.singletonArrayReduce,t.denom.ord.slice(1))}
+    }
+  }}
+]
+
+objectRenderers.forEach(objRend => {
+  allRules["recog:" + objRend.objectName] = {
+    name: "Recognize " + objRend.objectName,
+    match: t => {
+      var data = objRend.recog(t)
+      if(data && objectMatches(objRend.render(data),t)){
+        return data
+      }
+    },
+    apply: (t,o) => {return clone({objectName: objRend.objectName, data: o})}
+  }
+})
+
 additiveTemplate = {
   priority: 20,
   name: "Additivity",
@@ -329,6 +373,22 @@ function ruleFromTemplate(template){
     }
   }
 }
+
+[{op: "\\div", func: (a,b) => a / b, name: "Division"}
+,{op: "-", func: (a,b) => a - b, name: "Subtraction"}
+,{op: "\\cdot", func: (a,b) => a * b, name: "Multiplication"}
+,{op: "+", func: (a,b) => a + b, name: "Addtion"}].forEach(x => {
+  allRules["evalReal" + x.name] = {
+    priority: 100,
+    name: "Eval Real " + x.name,
+    match: t => {
+      if(t.binop?.textContent == x.op && t.left.value && t.right.value && t.binop.typing && objectMatches(mkBinopType({textContent: "\\mathbb{R}"},{textContent: "\\mathbb{R}"},{textContent: "\\mathbb{R}"}),t.binop.typing)){
+        return x.func(t.left.value.number, t.right.value.number)
+      }
+    },
+    apply: (t,o) => {return {textContent: o.toFixed(3), origin: "Eval Real " + x.name, typing: {textContent: "\\mathbb{R}"}, value: {number: o}}}
+  }
+})
 
 allRules.assumeJuxtIsCdotRule = {
   priority: -10,
@@ -373,24 +433,24 @@ validRules.symbolicPartial = {
       return {variable: deepApply(validRules.singletonArrayReduce,t.denom.ord.slice(1))}
     }
   },
-  apply: (t,o) => {return {partialVariable: o.variable, type: "op"}}
+  apply: (t,o) => {return {objectName: "partial", data: {variable: o.variable}, type: "op"}}
 }
 
 allRules.productRule = {
   priority: 20,
   name: "Product rule",
   match: t => {
-    if(t.operator?.partialVariable && t.argument.binop?.textContent == "\\cdot"){
-      return {variable: t.operator.partialVariable,prod: t.argument.left, rest: t.argument.right}
+    if(t.operator?.objectName == "partial" && t.argument.binop?.textContent == "\\cdot"){
+      return {deriv: t.operator,prod: t.argument.left, rest: t.argument.right}
     }
   },
   apply: (t,o) => {
     var out = 
       {binop: {textContent: "+", origin: "Product rule"}
-      ,left: {binop: {textContent: "\\cdot", origin: "Product rule"}, left: {paren: {operator: partialDerivative(o.variable), argument: o.prod}},right: o.rest}
-      ,right: {binop: {textContent: "\\cdot", origin: "Product rule"}, left: o.prod,right: {paren: {operator: partialDerivative(o.variable), argument: o.rest}}}
+      ,left: {binop: {textContent: "\\cdot", origin: "Product rule"}, left: {paren: {operator: o.deriv, argument: o.prod}},right: o.rest}
+      ,right: {binop: {textContent: "\\cdot", origin: "Product rule"}, left: o.prod,right: {paren: {operator: o.deriv, argument: o.rest}}}
       }
-    return out
+    return clone(out)
   }
 }
 
@@ -513,7 +573,8 @@ allRules.numberLiteralValue = {
   apply: (t,o) => {t.value = {number: o}; return t}
 }
 
-const emptyBinopType = {binop: {textContent: "\\to"}, left: {binop: {textContent: "\\times"}, left: {textContent: "?"}, right: {textContent: "?"}}, right: {textContent: "?"}}
+const mkBinopType = (l,r,o) => {return {binop: {textContent: "\\to"}, left: {binop: {textContent: "\\times"}, left: l, right: r}, right: o}}
+const emptyBinopType = mkBinopType({textContent: "?"}, {textContent: "?"}, {textContent: "?"})
 
 allRules.assumeEqualSignType = {
   priority: 100,
@@ -574,7 +635,7 @@ allRules.annoteBinopType = {
   priority: -100,
   name: "Unknown Binop Type",
   match: t => {
-    if(t.binop && !t.binop.typing){
+    if(t.binop && !t.binop.typing && t.binop.textContent != "\\to"){
       return true
     }
   },
@@ -591,6 +652,34 @@ allRules.inferOperatorTyping = {
   },
   apply: (t,o) => {
     t.operator.typing.left = o
+    return t
+  }
+}
+
+allRules.inferBinopTypingLeft = {
+  priority: 50,
+  name: "Infer binop typing (left)",
+  match: t => {
+    if(t.binop?.typing?.binop?.textContent == "\\to" && t.binop.typing.left.binop?.textContent == "\\times" && t.binop.typing.left.left?.textContent == "?" && t.left.typing){
+      return clone(t.left.typing)
+    }
+  },
+  apply: (t,o) => {
+    t.binop.typing.left.left = o
+    return t
+  }
+}
+
+allRules.inferBinopTypingRight = {
+  priority: 50,
+  name: "Infer binop typing (right)",
+  match: t => {
+    if(t.binop?.typing?.binop?.textContent == "\\to" && t.binop.typing.left.binop?.textContent == "\\times" && t.binop.typing.left.right?.textContent == "?" && t.right.typing){
+      return clone(t.right.typing)
+    }
+  },
+  apply: (t,o) => {
+    t.binop.typing.left.right = o
     return t
   }
 }
@@ -612,11 +701,32 @@ validRules.recognizeOperator = {
     if(!Array.isArray(t)){return}
     var opIdx = t.findIndex(x => x.type == "op" || x.base?.type == "op")
     var operator = t[opIdx]
-    if(operator && opIdx < t.length - 1){
-      if(t[opIdx + 1]?.paren){
-        return {op: operator, arg: t[opIdx+1], left: t.slice(0,opIdx), rest: t.slice(opIdx + 2)}
-      }
+    if(operator && opIdx < t.length - 1 && !(t.length == 2 && t[1].paren)){
+      //if(t[opIdx + 1]?.paren){
+       // return {op: operator, arg: t[opIdx+1], left: t.slice(0,opIdx), rest: t.slice(opIdx + 2)}
+      //}
       return {op: operator, arg: matchApply(validRules.singletonArrayReduce,t.slice(opIdx+1)), left: t.slice(0,opIdx)}
+    }
+  },
+  apply: (t,o) => {
+    o.left.push({operator: o.op, argument: o.arg})
+    if(o.rest){
+      o.left = o.left.concat(o.rest)
+    }
+    return matchApply(validRules.singletonArrayReduce,o.left)
+  }
+}
+
+validRules.recognizeParenOperator = {
+  priority: 100,
+  name: "Recognize paren operator",
+  match: t => {
+    var operator
+    if(!Array.isArray(t)){return}
+    var parenIdx = t.findIndex(x => x.paren)
+    var operator = t[parenIdx - 1]
+    if(operator){
+      return {op: operator, arg: t[parenIdx].paren, left: t.slice(0,parenIdx - 1), rest: t.slice(parenIdx + 1)}
     }
   },
   apply: (t,o) => {
@@ -640,6 +750,21 @@ validRules.recognizeEquation = {
     }
   },
   apply: (t,o) => deepApply(validRules.singletonArrayReduce,{binop: {textContent: "=", origin: "Recognized equality"}, left: o.lhs, right: o.rhs})
+}
+
+validRules.recognizeTypeAnnotation = {
+  priority: 100,
+  name: "Recognize annotation",
+  match: t => {
+    if(Array.isArray(t) && t[1]?.textContent == ":" && t.length > 2){
+      return clone({val: t[0], typ: t.slice(2)})
+    }
+  },
+  apply: (t,o) => {
+    var out = {typing: matchApply(validRules.singletonArrayReduce,o.typ)}
+    Object.assign(out,o.val)
+    return out
+  }
 }
 
 Object.assign(allRules,validRules)
@@ -680,19 +805,19 @@ function collapseString(tree){
 }
 
 function numberLiteral(tree){
-  var stringVersion = collapseString(tree)
-  var numVersion
-  if(stringVersion.includes(".")){
-    numVersion = parseFloat(stringVersion)
-  }else{
-    numVersion = parseInt(stringVersion)
+  var stringVersion = ""
+  if(tree.textContent){
+    stringVersion = tree.textContent
+  }else if(Array.isArray(tree)){
+    tree.forEach(x => stringVersion += x.textContent)
   }
+  var numVersion = Number(stringVersion)
   if(!Number.isNaN(numVersion))
     return numVersion
 }
 
 function partialDerivative(x){
-  return {partialVariable: x}
+  return {objectName: "partial", data: {variable: x}}
 }
 
 function clone(o){
