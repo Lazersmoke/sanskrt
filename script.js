@@ -14,6 +14,7 @@ window.onload = () => {
       katex.render(reconstructedLatex,renderOut,{displayMode: true})
       const actions = document.getElementById("actionList")
       actions.innerHTML = ""
+      sortedRules = Object.values(allRules).sort((a,b) => a.priority - b.priority)
       for(let rule of sortedRules){
         var locs = []
         if(rule.match(treeOut)){
@@ -56,10 +57,12 @@ window.onload = () => {
     renderOut.style.backgroundColor = "#77ff77"
   }
   document.getElementById("typesCheck").addEventListener("click", e => updateTree(() => treeOut))
+  document.getElementById("storeButton").addEventListener("click", e => {storeRule(); updateTree(() => treeOut)})
+  document.getElementById("codeOutput").value = "storedRules = " + JSON.stringify(storedRules,null,"  ")
   inputElem.addEventListener("input",e => {
     updateTree(() => {
       const katexOut = katex.__parse(inputElem.value.replace(/\$/g,""))
-      textOut.value = JSON.stringify(katexOut,null,"  ")
+      //textOut.value = JSON.stringify(katexOut,null,"  ")
       return parsedToTree(katexOut)
     })
   })
@@ -136,7 +139,7 @@ function renderAsLatex(tree, showTypes = false){
     out += renderAsLatex(tree.left,showTypes) + renderAsLatex(tree.binop,showTypes) + renderAsLatex(tree.right,showTypes)
   }
   else if(tree.operator){
-    var thisBit = renderAsLatex(tree.operator,showTypes) + "[ " + renderAsLatex(tree.argument,showTypes) + " ] "
+    var thisBit = renderAsLatex(tree.operator,showTypes) + "\\left[ " + renderAsLatex(tree.argument,showTypes) + " \\right] "
     if(showTypes && tree.typing){
       out += "{\\left\\langle " + thisBit + " \\colon " + renderAsLatex(tree.typing,showTypes) + "\\right\\rangle} "
     }else{
@@ -316,33 +319,85 @@ allRules = {}
 validRules = {}
 
 objectRenderers = [
-  {objectName: "pullback", render: data => {
-    return {base: data.base, sup: {textContent: "*"}}
-  }, recog: t => {
-    var data = {base: t.base}
-    return data
-  }},
+  {objectName: "pullback", render: data => ({base: data.base, sup: {textContent: "*"}}), recog: t => ({base: t.base, type: "op"})},
   {objectName: "partial", render: data => {
     return {numer: {ord: {textContent: "\\partial"}}, denom: {ord: [{textContent: "\\partial"},data.variable]}}
   }, recog: t => {
     if(t.numer?.ord.textContent == "\\partial" && t.denom?.ord[0]?.textContent == "\\partial" && t.denom.ord.length > 1){
-      return {variable: deepApply(validRules.singletonArrayReduce,t.denom.ord.slice(1))}
+      return {variable: deepApply(validRules.singletonArrayReduce,t.denom.ord.slice(1)), type: "op"}
+    }
+  }},
+  {objectName: "placeholder", render: data => {
+    return [{textContent: "\\#"},data.placeholderName]
+  }, recog: t => {
+    if(Array.isArray(t) && t.length == 2 && t[0].textContent == "\\#"){
+      return {placeholderName: clone(t[1])}
     }
   }}
 ]
 
 objectRenderers.forEach(objRend => {
   allRules["recog:" + objRend.objectName] = {
+    priority: 90,
     name: "Recognize " + objRend.objectName,
     match: t => {
       var data = objRend.recog(t)
-      if(data && objectMatches(objRend.render(data),t)){
+      if(data && objectMatches(clone(objRend.render(data)),t)){
         return data
       }
     },
     apply: (t,o) => {return clone({objectName: objRend.objectName, data: o})}
   }
 })
+
+storedRules = [
+  "{\"binop\":{\"textContent\":\"=\",\"origin\":\"Recognized equality\"},\"left\":{\"binop\":{\"textContent\":\"=\",\"origin\":\"Recognized equality\"},\"left\":{\"objectName\":\"placeholder\",\"data\":{\"placeholderName\":{\"textContent\":\"1\",\"origin\":\"parse\",\"type\":\"textord\"}}},\"right\":{\"objectName\":\"placeholder\",\"data\":{\"placeholderName\":{\"textContent\":\"2\",\"origin\":\"parse\",\"type\":\"textord\"}}}},\"right\":{\"binop\":{\"textContent\":\"=\",\"origin\":\"Recognized equality\"},\"left\":{\"objectName\":\"placeholder\",\"data\":{\"placeholderName\":{\"textContent\":\"2\",\"origin\":\"parse\",\"type\":\"textord\"}}},\"right\":{\"objectName\":\"placeholder\",\"data\":{\"placeholderName\":{\"textContent\":\"1\",\"origin\":\"parse\",\"type\":\"textord\"}}}}}"
+]
+storedRules.forEach(x => {var t = JSON.parse(x); allRules[renderAsLatex(t)] = ruleFromEquation(t)})
+function storeRule(){
+  allRules[renderAsLatex(treeOut)] = ruleFromEquation(treeOut)
+  storedRules.push(JSON.stringify(treeOut))
+  document.getElementById("codeOutput").value = "storedRules = " + JSON.stringify(storedRules,null,"  ")
+}
+
+function ruleFromEquation(equat){
+  return {
+    priority: 0,
+    name: "Equation Rule",
+    match: t => {
+      var placeValues = []
+      const trav = (form,obj) => {
+        if(!(typeof form === 'object')){
+          return form == obj
+        }
+        var out = true
+        for(let k in form){
+          if(k == "type" || k == "origin" || k == "family"){ continue }
+          if(form[k].objectName == "placeholder"){
+            if(obj[k]){
+              placeValues.push({key: clone(form[k].data.placeholderName), val: clone(obj[k])})
+            }else{
+              return false
+            }
+          }else{
+            out = out && obj[k] && trav(form[k],obj[k])
+          }
+        }
+        return out
+      }
+      return trav(equat.left,t) && placeValues
+    },
+    apply: (t,placeValues) => {
+      var ourCopy = clone(equat.right)
+      traverseSubExprs(ourCopy, (o,p,c) => {
+        if(o[p].objectName == "placeholder"){
+          o[p] = placeValues.find(x => objectMatches(x.key,o[p].data.placeholderName)).val
+        }
+      })
+      return ourCopy
+    }
+  }
+}
 
 additiveTemplate = {
   priority: 20,
@@ -358,7 +413,6 @@ function ruleFromTemplate(template){
     match: t => objectMatches(template.reqs,t),
     apply: (t,o) => {
       const trav = obj => {
-        console.log(obj)
         for(let k in obj){
           if(obj[k].template){
             obj[k] = atCrumb(t,obj[k].template)
@@ -377,7 +431,7 @@ function ruleFromTemplate(template){
 [{op: "\\div", func: (a,b) => a / b, name: "Division"}
 ,{op: "-", func: (a,b) => a - b, name: "Subtraction"}
 ,{op: "\\cdot", func: (a,b) => a * b, name: "Multiplication"}
-,{op: "+", func: (a,b) => a + b, name: "Addtion"}].forEach(x => {
+,{op: "+", func: (a,b) => a + b, name: "Addition"}].forEach(x => {
   allRules["evalReal" + x.name] = {
     priority: 100,
     name: "Eval Real " + x.name,
@@ -387,6 +441,23 @@ function ruleFromTemplate(template){
       }
     },
     apply: (t,o) => {return {textContent: o.toFixed(3), origin: "Eval Real " + x.name, typing: {textContent: "\\mathbb{R}"}, value: {number: o}}}
+  }
+})
+
+const complexOps = ([{op: "\\div", func: (a,b) => ({real: (a.real * b.real + a.imag * b.imag) / (b.real * b.real + b.imag * b.imag), imag: (a.imag * b.real - a.real * b.imag) / (b.real * b.real + b.imag * b.imag)}), name: "Division"}
+,{op: "-", func: (a,b) => ({real: a.real - b.real, imag: a.imag - b.imag}), name: "Subtraction"}
+,{op: "\\cdot", func: (a,b) => ({real: a.real * b.real - a.imag * b.imag, imag: a.real * b.imag + b.real * a.imag}), name: "Multiplication"}
+,{op: "+", func: (a,b) => ({real: a.real + b.real, imag: a.imag + b.imag}), name: "Addition"}])
+complexOps.forEach(x => {
+  allRules["evalComplex" + x.name] = {
+    priority: 100,
+    name: "Eval Complex " + x.name,
+    match: t => {
+      if(t.binop?.textContent == x.op && t.left.value && t.right.value && t.binop.typing && objectMatches(mkBinopType({textContent: "\\mathbb{C}"},{textContent: "\\mathbb{C}"},{textContent: "\\mathbb{C}"}),t.binop.typing)){
+        return x.func(t.left.value, t.right.value)
+      }
+    },
+    apply: (t,o) => {return {textContent: o.real.toFixed(3) + " + " + o.imag.toFixed(3) + "i", origin: "Eval Complex " + x.name, typing: {textContent: "\\mathbb{C}"}, value: o}}
   }
 })
 
@@ -423,17 +494,6 @@ validRules.recognizeBinop = {
     }
   },
   apply: (t,o) => o
-}
-
-validRules.symbolicPartial = {
-  priority: 100,
-  name: "Symbolic Partial",
-  match: t => {
-    if(t.numer?.ord.textContent == "\\partial" && t.denom?.ord[0]?.textContent == "\\partial" && t.denom.ord.length > 1){
-      return {variable: deepApply(validRules.singletonArrayReduce,t.denom.ord.slice(1))}
-    }
-  },
-  apply: (t,o) => {return {objectName: "partial", data: {variable: o.variable}, type: "op"}}
 }
 
 allRules.productRule = {
@@ -564,7 +624,7 @@ allRules.constantValue = {
   apply: (t,o) => {t.value = o; return t}
 }
 allRules.numberLiteralValue = {
-  priority: 100,
+  priority: -1,
   name: "Number Literal",
   match: t => {
     if(t.value){return}
@@ -623,7 +683,7 @@ allRules.annotateUnknownType = {
   priority: -50,
   name: "Unknown Type",
   match: t => {
-    if((t.type == "mathord" || t.type == "textord" || t.base?.type == "mathord" || t.base?.type == "textord" || t.operator) && !t.typing){
+    if((t.type == "mathord" || t.type == "textord" || t.base?.type == "mathord" || t.base?.type == "textord" || t.operator || t.objectName == "placeholder") && !t.typing){
       return true
     }
   },
@@ -699,12 +759,9 @@ validRules.recognizeOperator = {
   match: t => {
     var operator
     if(!Array.isArray(t)){return}
-    var opIdx = t.findIndex(x => x.type == "op" || x.base?.type == "op")
+    var opIdx = t.findIndex(x => x.type == "op" || x.base?.type == "op" || x.data?.type == "op")
     var operator = t[opIdx]
     if(operator && opIdx < t.length - 1 && !(t.length == 2 && t[1].paren)){
-      //if(t[opIdx + 1]?.paren){
-       // return {op: operator, arg: t[opIdx+1], left: t.slice(0,opIdx), rest: t.slice(opIdx + 2)}
-      //}
       return {op: operator, arg: matchApply(validRules.singletonArrayReduce,t.slice(opIdx+1)), left: t.slice(0,opIdx)}
     }
   },
@@ -745,7 +802,7 @@ validRules.recognizeEquation = {
     if(Array.isArray(t) && t.length > 2){
       var eqIndex = t.findIndex(x => x.textContent == "=")
       if(eqIndex && 0 < eqIndex && eqIndex < t.length - 1){
-        return {lhs: t.slice(0,eqIndex), rhs: t.slice(eqIndex + 1)}
+        return clone({lhs: t.slice(0,eqIndex), rhs: t.slice(eqIndex + 1)})
       }
     }
   },
@@ -768,7 +825,6 @@ validRules.recognizeTypeAnnotation = {
 }
 
 Object.assign(allRules,validRules)
-sortedRules = Object.values(allRules).sort((a,b) => a.priority - b.priority)
 
 function matchApply(rule,t){
   var res = rule.match(clone(t))
@@ -817,7 +873,7 @@ function numberLiteral(tree){
 }
 
 function partialDerivative(x){
-  return {objectName: "partial", data: {variable: x}}
+  return {objectName: "partial", data: {variable: x, type: "op"}}
 }
 
 function clone(o){
@@ -825,6 +881,7 @@ function clone(o){
 }
 
 function traverseSubExprs(o,f,c=[]){
+  if(c.length > 30){console.warn(c); ;console.log(new Error().stack); return}
   if(Array.isArray(o)){
     o.forEach((x,i) => {
       c.push(i)
