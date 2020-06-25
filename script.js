@@ -30,7 +30,7 @@ window.onload = () => {
           var button = document.createElement("button")
           button.className = "actionButton"
           button.addEventListener("click", e => {
-            updateTree(() => {console.log(clone(rule),treeOut,loc); return matchApplyAtCrumb(rule,treeOut,loc)})
+            updateTree(() => {console.log(clone(rule),clone(treeOut),loc); return matchApplyAtCrumb(rule,treeOut,loc)})
           })
 
           button.append(rule.name)
@@ -58,7 +58,8 @@ window.onload = () => {
   }
   document.getElementById("typesCheck").addEventListener("click", e => updateTree(() => treeOut))
   document.getElementById("storeButton").addEventListener("click", e => {storeRule(); updateTree(() => treeOut)})
-  document.getElementById("codeOutput").value = "storedRules = " + JSON.stringify(storedRules,null,"  ")
+  const parsed = storedRules.map(x => JSON.parse(x))
+  document.getElementById("codeOutput").value = "storedRules = " + JSON.stringify(parsed,null,"  ")
   inputElem.addEventListener("input",e => {
     updateTree(() => {
       const katexOut = katex.__parse(inputElem.value.replace(/\$/g,""))
@@ -110,75 +111,57 @@ function renderType(type){
 
 // Render out our expression tree to latex
 function renderAsLatex(tree, showTypes = false){
-  var out = ""
+  var thisBit = ""
   if(Array.isArray(tree)){
     tree.forEach(x => {
       if(Array.isArray(x)){
-        out += renderAsLatex({paren: x},showTypes)
+        thisBit += renderAsLatex({paren: x},showTypes)
       }else{
-        out += renderAsLatex(x,showTypes)
+        thisBit += renderAsLatex(x,showTypes)
       }
     })
   }
   else if(tree.paren){
-    out += "\\left(" + renderAsLatex(tree.paren,showTypes) + "\\right)"
+    thisBit = "\\left(" + renderAsLatex(tree.paren,showTypes) + "\\right)"
   }
   else if(tree.ord){
-    out += "{" + renderAsLatex(tree.ord,showTypes) + "}"
+    thisBit = "{" + renderAsLatex(tree.ord,showTypes) + "}"
   }
   else if(tree.objectName){
     const renderer = objectRenderers.find(x => x.objectName == tree.objectName).render
-    var thisBit = renderAsLatex(renderer(tree.data),showTypes)
-    if(showTypes && tree.typing){
-      out += "{\\left\\langle " + thisBit + " \\colon " + renderAsLatex(tree.typing,showTypes) + "\\right\\rangle} "
-    }else{
-      out += thisBit
-    }
+    thisBit = renderAsLatex(renderer(tree.data),showTypes)
   }
   else if(tree.binop){
-    out += renderAsLatex(tree.left,showTypes) + renderAsLatex(tree.binop,showTypes) + renderAsLatex(tree.right,showTypes)
+    thisBit = renderAsLatex(tree.left,showTypes) + renderAsLatex(tree.binop,showTypes) + renderAsLatex(tree.right,showTypes)
   }
   else if(tree.operator){
-    var thisBit = renderAsLatex(tree.operator,showTypes) + "\\left[ " + renderAsLatex(tree.argument,showTypes) + " \\right] "
-    if(showTypes && tree.typing){
-      out += "{\\left\\langle " + thisBit + " \\colon " + renderAsLatex(tree.typing,showTypes) + "\\right\\rangle} "
-    }else{
-      out += thisBit
-    }
+    thisBit = renderAsLatex(tree.operator,showTypes) + "\\left[ " + renderAsLatex(tree.argument,showTypes) + " \\right] "
   }
   else if(tree.numer){
-    out += "\\frac" + renderAsLatex(tree.numer,showTypes) + renderAsLatex(tree.denom,showTypes)
+    thisBit = "\\frac" + renderAsLatex(tree.numer,showTypes) + renderAsLatex(tree.denom,showTypes)
   }
   else if(tree.base){
-    var thisBit = ""
-    thisBit += renderAsLatex(tree.base,showTypes)
+    thisBit = renderAsLatex(tree.base,showTypes)
     if(tree.sub){
       thisBit += "_" + renderAsLatex(tree.sub,showTypes)
     }
     if(tree.sup){
       thisBit += "^" + renderAsLatex(tree.sup,showTypes)
     }
-    if(showTypes && tree.typing){
-      out += "{\\left\\langle " + thisBit + " \\colon " + renderAsLatex(tree.typing,showTypes) + "\\right\\rangle} "
-    }else{
-      out += thisBit
-    }
   }
   else if(tree.textContent){
-    if(showTypes && tree.typing){
-      out += "{\\left\\langle " + tree.textContent + " \\colon " + renderAsLatex(tree.typing,showTypes) + "\\right\\rangle} "
-    }else{
-      out += tree.textContent + " "
-    }
+    thisBit = tree.textContent + " "
   }
   if(tree.value){
-    out = "\\textcolor{blue}{" + out + "}"
+    thisBit = "\\textcolor{blue}{" + thisBit + "}"
   }
-  return out
+  if(showTypes && tree.typing){
+    thisBit = "{\\left\\langle " + thisBit + " \\colon " + renderAsLatex(tree.typing,showTypes) + "\\right\\rangle} "
+  }
+  return thisBit
 }
 
 function matchApplyAtCrumb(rule,x,crumb){
-  console.log("crumb is ",crumb)
   if(crumb.length == 0){
     return matchApply(rule,x)
   }
@@ -351,13 +334,16 @@ objectRenderers.forEach(objRend => {
 })
 
 storedRules = [
-  "{\"binop\":{\"textContent\":\"=\",\"origin\":\"Recognized equality\"},\"left\":{\"binop\":{\"textContent\":\"=\",\"origin\":\"Recognized equality\"},\"left\":{\"objectName\":\"placeholder\",\"data\":{\"placeholderName\":{\"textContent\":\"1\",\"origin\":\"parse\",\"type\":\"textord\"}}},\"right\":{\"objectName\":\"placeholder\",\"data\":{\"placeholderName\":{\"textContent\":\"2\",\"origin\":\"parse\",\"type\":\"textord\"}}}},\"right\":{\"binop\":{\"textContent\":\"=\",\"origin\":\"Recognized equality\"},\"left\":{\"objectName\":\"placeholder\",\"data\":{\"placeholderName\":{\"textContent\":\"2\",\"origin\":\"parse\",\"type\":\"textord\"}}},\"right\":{\"objectName\":\"placeholder\",\"data\":{\"placeholderName\":{\"textContent\":\"1\",\"origin\":\"parse\",\"type\":\"textord\"}}}}}"
+  "{\"binop\":{\"textContent\":\"=\",\"origin\":\"Recognized equality\"},\"left\":{\"objectName\":\"placeholder\",\"data\":{\"placeholderName\":{\"textContent\":\"1\",\"origin\":\"parse\",\"type\":\"textord\"}},\"typing\":{\"textContent\":\"?\"}},\"right\":{\"typing\":{\"textContent\":\"V\",\"vectorSpace\":true,\"origin\":\"parse\",\"type\":\"mathord\"},\"objectName\":\"placeholder\",\"data\":{\"placeholderName\":{\"textContent\":\"1\",\"origin\":\"parse\",\"type\":\"textord\"}}}}"
+/*,
+  "{\"binop\":{\"textContent\":\"=\",\"origin\":\"Recognized equality\"},\"left\":{\"binop\":{\"textContent\":\"=\",\"origin\":\"Recognized equality\"},\"left\":{\"objectName\":\"placeholder\",\"data\":{\"placeholderName\":{\"textContent\":\"1\",\"origin\":\"parse\",\"type\":\"textord\"}}},\"right\":{\"objectName\":\"placeholder\",\"data\":{\"placeholderName\":{\"textContent\":\"2\",\"origin\":\"parse\",\"type\":\"textord\"}}}},\"right\":{\"binop\":{\"textContent\":\"=\",\"origin\":\"Recognized equality\"},\"left\":{\"objectName\":\"placeholder\",\"data\":{\"placeholderName\":{\"textContent\":\"2\",\"origin\":\"parse\",\"type\":\"textord\"}}},\"right\":{\"objectName\":\"placeholder\",\"data\":{\"placeholderName\":{\"textContent\":\"1\",\"origin\":\"parse\",\"type\":\"textord\"}}}}}"*/
 ]
 storedRules.forEach(x => {var t = JSON.parse(x); allRules[renderAsLatex(t)] = ruleFromEquation(t)})
 function storeRule(){
   allRules[renderAsLatex(treeOut)] = ruleFromEquation(treeOut)
   storedRules.push(JSON.stringify(treeOut))
-  document.getElementById("codeOutput").value = "storedRules = " + JSON.stringify(storedRules,null,"  ")
+  const parsed = storedRules.map(x => JSON.parse(x))
+  document.getElementById("codeOutput").value = "storedRules = " + JSON.stringify(parsed,null,"  ")
 }
 
 function ruleFromEquation(equat){
@@ -371,17 +357,14 @@ function ruleFromEquation(equat){
           return form == obj
         }
         var out = true
+        if(!obj){return false}
+        if(form.objectName == "placeholder" && (!form.typing || trav(form.typing,obj.typing))){
+          placeValues.push({key: clone(form.data.placeholderName), val: clone(obj)})
+          return true
+        }
         for(let k in form){
           if(k == "type" || k == "origin" || k == "family"){ continue }
-          if(form[k].objectName == "placeholder"){
-            if(obj[k]){
-              placeValues.push({key: clone(form[k].data.placeholderName), val: clone(obj[k])})
-            }else{
-              return false
-            }
-          }else{
-            out = out && obj[k] && trav(form[k],obj[k])
-          }
+          out = out && obj[k] && trav(form[k],obj[k])
         }
         return out
       }
@@ -389,10 +372,17 @@ function ruleFromEquation(equat){
     },
     apply: (t,placeValues) => {
       var ourCopy = clone(equat.right)
-      traverseSubExprs(ourCopy, (o,p,c) => {
-        if(o[p].objectName == "placeholder"){
-          o[p] = placeValues.find(x => objectMatches(x.key,o[p].data.placeholderName)).val
+      const doRepl = obj => {
+        if(obj.objectName == "placeholder"){
+          var newOne = placeValues.find(x => objectMatches(x.key,obj.data.placeholderName)).val
+          if(obj.typing){ newOne.typing = obj.typing }
+          obj = newOne
         }
+        return obj
+      }
+      ourCopy = doRepl(ourCopy)
+      traverseSubExprs(ourCopy, (o,p,c) => {
+        o[p] = doRepl(o[p])
       })
       return ourCopy
     }
@@ -555,7 +545,7 @@ validRules.expandBigOperator = {
 }
 
 allRules.outputType = {
-  priority: -10,
+  priority: 100,
   name: "Use operator output type",
   match: t => {
     if(t.typing?.textContent == "?" && t.operator?.typing?.binop?.textContent == "\\to" && t.operator.typing.right.textContent != "?"){
@@ -564,16 +554,37 @@ allRules.outputType = {
   },
   apply: (t,o) => {t.typing = o; return t}
 }
-
-allRules.assumeRealOperator = {
-  priority: -10,
-  name: "Assume Real-valued Operator",
+allRules.binopOutputType = {
+  priority: 100,
+  name: "Use binop output type",
   match: t => {
-    if(t.typing?.binop?.textContent == "\\to" && t.typing.right.textContent == "?"){
-      return true
+    if(t.typing?.textContent == "?" && t.binop?.typing?.binop?.textContent == "\\to" && t.binop.typing.right.textContent != "?"){
+      return clone(t.binop.typing.right)
     }
   },
-  apply: (t,o) => {t.typing.right = {textContent: "\\mathbb{R}"}; return t}
+  apply: (t,o) => {t.typing = o; return t}
+}
+
+allRules.assumeClosedUnop = {
+  priority: 50,
+  name: "Assume Closed Unary",
+  match: t => {
+    if(t.typing?.binop?.textContent == "\\to" && t.typing.right.textContent == "?" && t.typing.left.textContent != "?"){
+      return clone(t.typing.left)
+    }
+  },
+  apply: (t,o) => {t.typing.right = o; return t}
+}
+
+allRules.assumeClosedMagma = {
+  priority: 50,
+  name: "Assume Closed Magma",
+  match: t => {
+    if(t.typing?.binop?.textContent == "\\to" && t.typing.right.textContent == "?" && t.typing.left.binop?.textContent == "\\times" && objectMatches(t.typing.left.left,t.typing.left.right)){
+      return clone(t.typing.left.left)
+    }
+  },
+  apply: (t,o) => {t.typing.right = o; return t}
 }
 
 allRules.assumeInteger = {
@@ -628,9 +639,12 @@ allRules.numberLiteralValue = {
   name: "Number Literal",
   match: t => {
     if(t.value){return}
-    return numberLiteral(t)
+    var n = numberLiteral(t)
+    console.log(n)
+    if(n !== undefined)
+      return {number: n}
   },
-  apply: (t,o) => {t.value = {number: o}; return t}
+  apply: (t,o) => {t.value = o; return t}
 }
 
 const mkBinopType = (l,r,o) => {return {binop: {textContent: "\\to"}, left: {binop: {textContent: "\\times"}, left: l, right: r}, right: o}}
@@ -683,7 +697,7 @@ allRules.annotateUnknownType = {
   priority: -50,
   name: "Unknown Type",
   match: t => {
-    if((t.type == "mathord" || t.type == "textord" || t.base?.type == "mathord" || t.base?.type == "textord" || t.operator || t.objectName == "placeholder") && !t.typing){
+    if((t.type == "mathord" || t.type == "textord" || t.base?.type == "mathord" || t.base?.type == "textord" || t.operator || t.binop || t.objectName == "placeholder") && !t.typing){
       return true
     }
   },
@@ -706,7 +720,7 @@ allRules.inferOperatorTyping = {
   priority: 50,
   name: "Infer operator typing",
   match: t => {
-    if(t.operator?.typing?.binop?.textContent == "\\to" && t.operator.typing.left.textContent == "?" && t.argument.typing){
+    if(t.operator?.typing?.binop?.textContent == "\\to" && t.operator.typing.left.textContent == "?" && t.argument.typing && t.argument.typing.textContent != "?"){
       return clone(t.argument.typing)
     }
   },
@@ -867,8 +881,8 @@ function numberLiteral(tree){
   }else if(Array.isArray(tree)){
     tree.forEach(x => stringVersion += x.textContent)
   }
-  var numVersion = Number(stringVersion)
-  if(!Number.isNaN(numVersion))
+  var numVersion = parseFloat(stringVersion)
+  if(!Number.isNaN(numVersion) && Number.isFinite(numVersion))
     return numVersion
 }
 
